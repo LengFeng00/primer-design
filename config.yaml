@@ -1,0 +1,52 @@
+# 引物设计工具配置文件
+
+# Primer3 参数
+primer:
+  opt_size: 20
+  min_size: 18
+  max_size: 25
+  opt_tm: 60.0
+  min_tm: 57.0
+  max_tm: 63.0
+  min_gc: 40.0
+  max_gc: 60.0
+  product_size_ranges:
+    - [100, 500]
+  max_pairs: 5  # 每个位点返回的引物对数量
+
+# 序列提取参数
+sequence:
+  flank_length: 150  # 变异位点上下游提取长度
+
+# BLAST 参数
+blast:
+  task: blastn-short
+  max_target_seqs: 10
+  evalue: 1000
+  word_size: 7
+  batch_size: 100  # 批处理模式下的批次大小
+  enable_batch: true  # 启用批处理优化
+
+# 并行处理
+parallel:
+  threads: 4  # 并行进程数
+  chunk_size: 10  # 每个进程处理的任务块大小
+
+# 输出设置
+output:
+  format: tsv  # 输出格式: tsv, csv, excel
+  sort_by: [Chromosome, Position]  # 排序字段
+  include_failed: true  # 是否在输出中包含失败的位点
+
+# 日志设置
+logging:
+  level: INFO  # DEBUG, INFO, WARNING, ERROR
+  file: primer_design.log
+  console: true
+
+# 高级选项
+advanced:
+  enable_resume: true  # 启用断点续传
+  checkpoint_interval: 50  # 每处理N个位点保存一次检查点
+  max_retries: 3  # 失败重试次数
+  validate_input: true  # 输入验证

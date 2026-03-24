@@ -1,0 +1,27 @@
+# 引物设计工具依赖
+# Python 3.8+
+
+# 核心依赖
+primer3-py>=2.0.0
+pyfaidx>=0.8.1
+cyvcf2>=0.30.0
+pandas>=1.3.0
+
+# 进度条
+tqdm>=4.62.0
+
+# 配置文件支持
+pyyaml>=6.0
+
+# 测试框架
+pytest>=7.0.0
+pytest-cov>=3.0.0
+
+# 代码质量
+black>=22.0.0
+flake8>=4.0.0
+mypy>=0.950
+
+# 外部工具（需通过 conda 安装）
+# blast
+# makeblastdb
