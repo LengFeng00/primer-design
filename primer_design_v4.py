@@ -53,6 +53,12 @@ class PrimerConfig:
     primer_max_gc: float = 60.0
     product_size_ranges: List[Tuple[int, int]] = field(default_factory=lambda: [(100, 500)])
     max_pairs: int = 5
+    # 二聚体/发夹结构过滤阈值
+    max_self_any: float = 60.0
+    max_self_end: float = 30.0
+    max_pair_compl: float = 60.0
+    max_pair_end: float = 30.0
+    max_hairpin_th: float = 30.0
 
 @dataclass
 class BLASTConfig:
@@ -76,6 +82,9 @@ class AppConfig:
     chunk_size: int = 10
     max_retries: int = 3
     validate_input: bool = True
+    # 背景SNP和缓存配置
+    background_vcf: Optional[str] = None
+    enable_blast_cache: bool = True
 
 # ==================== 工具函数 ====================
 
@@ -192,7 +201,12 @@ def load_config(config_file: Optional[str] = None) -> Dict[str, Any]:
             'min_gc': 40.0,
             'max_gc': 60.0,
             'product_size_ranges': [[100, 500]],
-            'max_pairs': 5
+            'max_pairs': 5,
+            'max_self_any': 60.0,
+            'max_self_end': 30.0,
+            'max_pair_compl': 60.0,
+            'max_pair_end': 30.0,
+            'max_hairpin_th': 30.0
         },
         'sequence': {
             'flank_length': 150
@@ -218,7 +232,9 @@ def load_config(config_file: Optional[str] = None) -> Dict[str, Any]:
             'enable_resume': True,
             'checkpoint_interval': 50,
             'max_retries': 3,
-            'validate_input': True
+            'validate_input': True,
+            'background_vcf': None,
+            'enable_blast_cache': True
         }
     }
 
@@ -247,13 +263,15 @@ class BLASTChecker:
     BLAST 特异性检查器
 
     支持单引物检查和批量检查，优化 I/O 性能
+    支持结果缓存以提升重复查询性能
     """
 
     def __init__(
         self,
         db_prefix: Path,
         config: BLASTConfig,
-        logger: logging.Logger
+        logger: logging.Logger,
+        shared_cache: Optional[Dict] = None
     ):
         """
         初始化 BLAST 检查器
@@ -262,10 +280,12 @@ class BLASTChecker:
             db_prefix: BLAST 数据库前缀
             config: BLAST 配置
             logger: 日志记录器
+            shared_cache: 共享缓存字典（用于多进程）
         """
         self.db_prefix = db_prefix
         self.config = config
         self.logger = logger
+        self.shared_cache = shared_cache  # Manager.dict() for cross-process sharing
 
     @staticmethod
     def build_blast_db(
@@ -327,6 +347,10 @@ class BLASTChecker:
         Returns:
             BLAST 命中列表
         """
+        # 检查缓存
+        if self.shared_cache is not None and primer_seq in self.shared_cache:
+            return self.shared_cache[primer_seq]
+
         import subprocess
         from tempfile import NamedTemporaryFile
 
@@ -372,6 +396,11 @@ class BLASTChecker:
                                 'evalue': float(parts[6]),
                                 'bitscore': float(parts[7])
                             })
+
+            # 保存到缓存
+            if self.shared_cache is not None:
+                self.shared_cache[primer_seq] = hits
+
             return hits
 
         except subprocess.CalledProcessError as e:
@@ -578,7 +607,8 @@ class VariantProcessor:
     """
     变异位点处理器
 
-    封装完整的引物设计流程：序列提取 → Primer3 设计 → BLAST 检查 → 产物模拟
+    封装完整的引物设计流程：
+    序列提取 → Primer3 设计 → 二聚体/发夹结构检查 → 背景SNP检查 → BLAST 检查 → 产物模拟
     """
 
     def __init__(
@@ -588,7 +618,8 @@ class VariantProcessor:
         blast_checker: BLASTChecker,
         flank_length: int,
         logger: logging.Logger,
-        max_retries: int = 3
+        max_retries: int = 3,
+        background_vcf_reader=None
     ):
         """
         初始化处理器
@@ -600,6 +631,7 @@ class VariantProcessor:
             flank_length: 侧翼序列长度
             logger: 日志记录器
             max_retries: 最大重试次数
+            background_vcf_reader: 背景SNP VCF读取器（可选）
         """
         self.genome = genome
         self.designer = designer
@@ -607,6 +639,7 @@ class VariantProcessor:
         self.flank_length = flank_length
         self.logger = logger
         self.max_retries = max_retries
+        self.bg_vcf_reader = background_vcf_reader
 
     def extract_sequence(
         self,
@@ -640,6 +673,40 @@ class VariantProcessor:
 
         return seq
 
+    def check_primers_for_snps(
+        self,
+        chrom: str,
+        left_primer_pos: Tuple[int, int],
+        right_primer_pos: Tuple[int, int]
+    ) -> Tuple[bool, Optional[str]]:
+        """
+        检查引物结合区是否存在背景SNP
+
+        Args:
+            chrom: 染色体名称
+            left_primer_pos: 左引物位置
+            right_primer_pos: 右引物位置
+
+        Returns:
+            (是否有SNP, 错误信息)
+        """
+        if not self.bg_vcf_reader:
+            return False, None  # 未提供背景VCF，跳过检查
+
+        # 检查左引物
+        left_start = left_primer_pos[0]
+        left_end = left_start + left_primer_pos[1]
+        for record in self.bg_vcf_reader(f'{chrom}:{left_start+1}-{left_end}'):
+            return True, f"左引物与已知SNP重叠 {chrom}:{record.POS}"
+
+        # 检查右引物
+        right_start = right_primer_pos[0] - right_primer_pos[1] + 1
+        right_end = right_primer_pos[0] + 1
+        for record in self.bg_vcf_reader(f'{chrom}:{right_start}-{right_end}'):
+            return True, f"右引物与已知SNP重叠 {chrom}:{record.POS}"
+
+        return False, None
+
     def process_variant(
         self,
         record: Dict[str, Any],
@@ -651,8 +718,10 @@ class VariantProcessor:
         流程：
         1. 提取侧翼序列
         2. Primer3 设计引物
-        3. BLAST 特异性检查
-        4. 提取扩增产物
+        3. 二聚体/发夹结构检查
+        4. 背景SNP检查
+        5. BLAST 特异性检查
+        6. 提取扩增产物
 
         Args:
             record: 变异位点记录
@@ -691,7 +760,34 @@ class VariantProcessor:
                     "引物信息提取失败"
                 )
 
-            # 3. BLAST 检查
+            # 3. 二聚体/发夹结构检查
+            if 'PRIMER_LEFT_0_SELF_ANY_TH' in primer_result:
+                if primer_result['PRIMER_LEFT_0_SELF_ANY_TH'] > self.designer.config.max_self_any:
+                    return self._make_error_result(
+                        record,
+                        f"左引物自身二聚体倾向过高 ({primer_result['PRIMER_LEFT_0_SELF_ANY_TH']:.1f} > {self.designer.config.max_self_any})"
+                    )
+                if primer_result['PRIMER_RIGHT_0_SELF_ANY_TH'] > self.designer.config.max_self_any:
+                    return self._make_error_result(
+                        record,
+                        f"右引物自身二聚体倾向过高 ({primer_result['PRIMER_RIGHT_0_SELF_ANY_TH']:.1f} > {self.designer.config.max_self_any})"
+                    )
+                if primer_result['PRIMER_PAIR_0_COMPL_ANY_TH'] > self.designer.config.max_pair_compl:
+                    return self._make_error_result(
+                        record,
+                        f"引物对之间二聚体倾向过高 ({primer_result['PRIMER_PAIR_0_COMPL_ANY_TH']:.1f} > {self.designer.config.max_pair_compl})"
+                    )
+
+            # 4. 背景SNP检查
+            has_snp, snp_msg = self.check_primers_for_snps(
+                chrom,
+                (pair['left_start'], len(pair['left_seq'])),
+                (pair['right_start'], len(pair['right_seq']))
+            )
+            if has_snp:
+                return self._make_error_result(record, snp_msg)
+
+            # 5. BLAST 检查
             left_hits = self.blast_checker.check_primer(pair['left_seq'])
             right_hits = self.blast_checker.check_primer(pair['right_seq'])
 
@@ -764,21 +860,33 @@ _global_designer = None
 _global_blast_checker = None
 _global_processor = None
 _global_config = None
+_global_bg_vcf_reader = None
 
 def init_worker(
     fasta_path: str,
     primer_config: PrimerConfig,
     blast_config: BLASTConfig,
     db_prefix: str,
-    app_config: AppConfig
+    app_config: AppConfig,
+    shared_cache=None,
+    background_vcf_path=None
 ):
     """
     初始化 worker 进程
 
     在每个子进程中独立加载参考基因组和配置对象
+
+    Args:
+        fasta_path: FASTA文件路径
+        primer_config: 引物设计配置
+        blast_config: BLAST配置
+        db_prefix: BLAST数据库前缀
+        app_config: 应用配置
+        shared_cache: 共享BLAST缓存（Manager.dict）
+        background_vcf_path: 背景SNP VCF文件路径
     """
     global _global_genome, _global_designer, _global_blast_checker
-    global _global_processor, _global_config
+    global _global_processor, _global_config, _global_bg_vcf_reader
 
     # 设置临时日志（避免多进程冲突）
     temp_logger = logging.getLogger("worker")
@@ -790,15 +898,27 @@ def init_worker(
     _global_blast_checker = BLASTChecker(
         Path(db_prefix),
         blast_config,
-        temp_logger
+        temp_logger,
+        shared_cache  # 传入共享缓存
     )
+
+    # 加载背景VCF（如果提供）
+    bg_vcf_reader = None
+    if background_vcf_path:
+        try:
+            bg_vcf_reader = VCF(background_vcf_path)
+            temp_logger.debug(f"已加载背景VCF: {background_vcf_path}")
+        except Exception as e:
+            temp_logger.warning(f"背景VCF加载失败: {str(e)}")
+
     _global_processor = VariantProcessor(
         _global_genome,
         _global_designer,
         _global_blast_checker,
         app_config.flank_length,
         temp_logger,
-        app_config.max_retries
+        app_config.max_retries,
+        bg_vcf_reader
     )
 
 def process_record_wrapper(record: Dict[str, Any]) -> Dict[str, Any]:
@@ -890,6 +1010,16 @@ def main():
         action='store_true',
         help='禁用断点续传'
     )
+    parser.add_argument(
+        '--bg-vcf',
+        type=str,
+        help='背景SNP VCF文件（用于规避引物结合区的已知SNP）'
+    )
+    parser.add_argument(
+        '--no-blast-cache',
+        action='store_true',
+        help='禁用BLAST结果缓存'
+    )
 
     args = parser.parse_args()
 
@@ -913,6 +1043,10 @@ def main():
         config['primer']['max_tm'] = args.max_tm
     if args.opt_tm:
         config['primer']['opt_tm'] = args.opt_tm
+    if args.bg_vcf:
+        config['advanced']['background_vcf'] = args.bg_vcf
+    if args.no_blast_cache:
+        config['advanced']['enable_blast_cache'] = False
 
     # 创建配置对象
     primer_config = PrimerConfig(
@@ -927,7 +1061,12 @@ def main():
         product_size_ranges=[
             tuple(r) for r in config['primer']['product_size_ranges']
         ],
-        max_pairs=config['primer']['max_pairs']
+        max_pairs=config['primer']['max_pairs'],
+        max_self_any=config['primer'].get('max_self_any', 60.0),
+        max_self_end=config['primer'].get('max_self_end', 30.0),
+        max_pair_compl=config['primer'].get('max_pair_compl', 60.0),
+        max_pair_end=config['primer'].get('max_pair_end', 30.0),
+        max_hairpin_th=config['primer'].get('max_hairpin_th', 30.0)
     )
 
     blast_config = BLASTConfig(
@@ -946,7 +1085,9 @@ def main():
         log_file=config['logging']['file'],
         log_level=config['logging']['level'],
         chunk_size=config['parallel']['chunk_size'],
-        max_retries=config['advanced']['max_retries']
+        max_retries=config['advanced']['max_retries'],
+        background_vcf=config['advanced'].get('background_vcf'),
+        enable_blast_cache=config['advanced'].get('enable_blast_cache', True)
     )
 
     # 初始化日志
@@ -963,6 +1104,11 @@ def main():
     logger.info(f"输出: {args.out}")
     logger.info(f"线程数: {app_config.threads}")
     logger.info(f"侧翼长度: {app_config.flank_length}")
+    if app_config.background_vcf:
+        logger.info(f"背景SNP检查: 已启用 ({app_config.background_vcf})")
+    if app_config.enable_blast_cache:
+        logger.info("BLAST缓存: 已启用")
+    logger.info(f"二聚体阈值: Any={primer_config.max_self_any}, Pair={primer_config.max_pair_compl}")
     logger.info("=" * 60)
 
     # 1. 验证输入
@@ -1021,6 +1167,14 @@ def main():
     results = []
     failures = []
 
+    # 创建共享BLAST缓存（如果启用）
+    shared_cache = None
+    if app_config.enable_blast_cache:
+        from multiprocessing import Manager
+        manager = Manager()
+        shared_cache = manager.dict()
+        logger.info("已启用BLAST结果缓存")
+
     with Pool(
         processes=app_config.threads,
         initializer=init_worker,
@@ -1029,7 +1183,9 @@ def main():
             primer_config,
             blast_config,
             str(db_prefix),
-            app_config
+            app_config,
+            shared_cache,
+            app_config.background_vcf
         )
     ) as pool:
         # 创建进度条

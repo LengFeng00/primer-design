@@ -13,6 +13,12 @@ primer:
   product_size_ranges:
     - [100, 500]
   max_pairs: 5  # 每个位点返回的引物对数量
+  # 二聚体/发夹结构过滤阈值
+  max_self_any: 60.0  # 引物自身二聚体最大评分（越低越严格）
+  max_self_end: 30.0  # 引物3'端自身二聚体最大评分
+  max_pair_compl: 60.0  # 引物对之间二聚体最大评分
+  max_pair_end: 30.0  # 引物对3'端之间二聚体最大评分
+  max_hairpin_th: 30.0  # 发夹结构最大评分
 
 # 序列提取参数
 sequence:
@@ -50,3 +56,7 @@ advanced:
   checkpoint_interval: 50  # 每处理N个位点保存一次检查点
   max_retries: 3  # 失败重试次数
   validate_input: true  # 输入验证
+  # 背景SNP规避
+  background_vcf: null  # (可选) 背景SNP VCF文件路径，用于规避引物结合区的已知SNP
+  # BLAST缓存
+  enable_blast_cache: true  # 启用BLAST结果缓存以提升性能
