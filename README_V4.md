@@ -454,4 +454,4 @@ MIT License
 ## 📧 联系方式
 
 - Issues: https://github.com/LengFeng00/primer-design/issues
-- Email: [your-email@example.com]
+- Email: [kanbl@webmail.hzau.edu.cn]
