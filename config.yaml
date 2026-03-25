@@ -28,7 +28,7 @@ sequence:
 blast:
   task: blastn-short
   max_target_seqs: 10
-  evalue: 1000
+  evalue: 1  # E-value阈值（越小越严格，推荐1-10）
   word_size: 7
   batch_size: 100  # 批处理模式下的批次大小
   enable_batch: true  # 启用批处理优化

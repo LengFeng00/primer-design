@@ -65,7 +65,7 @@ class BLASTConfig:
     """BLAST 检查配置"""
     task: str = "blastn-short"
     max_target_seqs: int = 10
-    evalue: float = 1000
+    evalue: float = 1  # E-value阈值（越小越严格，推荐1-10）
     word_size: int = 7
     batch_size: int = 100
     enable_batch: bool = True
@@ -214,7 +214,7 @@ def load_config(config_file: Optional[str] = None) -> Dict[str, Any]:
         'blast': {
             'task': 'blastn-short',
             'max_target_seqs': 10,
-            'evalue': 1000,
+            'evalue': 1,
             'word_size': 7,
             'batch_size': 100,
             'enable_batch': True

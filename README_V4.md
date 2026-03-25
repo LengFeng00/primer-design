@@ -160,7 +160,10 @@ sequence:
 blast:
   task: blastn-short    # BLAST 任务类型
   max_target_seqs: 10   # 最大目标序列数
-  evalue: 1000          # E-value 阈值
+  evalue: 1             # E-value 阈值（⚠️ 关键参数，影响引物特异性判断）
+                        #   - 1: 严格（推荐用于短引物，可准确识别唯一匹配）
+                        #   - 10-100: 中等（可能返回多个部分匹配）
+                        #   - 1000+: 宽松（会返回大量低质量匹配，不建议）
   word_size: 7          # 字长
   batch_size: 100       # 批处理批次大小
   enable_batch: true    # 启用批处理优化
